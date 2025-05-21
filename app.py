@@ -53,7 +53,14 @@ You must:
 
 - Answer the Question **only using the information provided in the Knowledge Base**.
 - When retrieving sections (like BAB III), provide the **complete section** including all subsections (like Pasal 4, 5, 6, etc.) until the next major section.
-- If the answer cannot be found on the Knowledge Base or not relevant, answer with "None" only.
+- If ANY of these conditions are met, you MUST respond with: "Maaf, berdasarkan dokumen yang tersedia, saya tidak dapat menemukan informasi yang relevan untuk menjawab pertanyaan Anda.":
+  * The answer cannot be found in the Knowledge Base
+  * The information in the Knowledge Base is not directly relevant to the question
+  * The question is ambiguous or unclear
+  * The Knowledge Base contains conflicting information
+  * The required information is incomplete
+- Do not make assumptions or inferences beyond what is explicitly stated in the Knowledge Base
+- Do not provide partial or speculative answers
 
 Formatting Rules:
 - Use **Markdown**.
@@ -94,6 +101,8 @@ def upload_file(client, uploaded_file):
         
         # Process the file with Gemini API
         if uploaded:
+            # Store the original filename in session state
+            st.session_state.file_names[uploaded.name] = uploaded_file.name
             # Clear the file context to ensure it's reprocessed
             st.session_state.file_context = []
             return uploaded
@@ -108,6 +117,8 @@ def initialize_session_state():
         st.session_state.messages = []
     if "uploaded_files" not in st.session_state:
         st.session_state.uploaded_files = []
+    if "file_names" not in st.session_state:
+        st.session_state.file_names = {}
     if "system_prompt" not in st.session_state:
         st.session_state.system_prompt = DEFAULT_SYSTEM_PROMPTS["retrieval"]
     if "total_tokens" not in st.session_state:
@@ -118,6 +129,32 @@ def initialize_session_state():
         st.session_state.file_context = []
     if "upload_key" not in st.session_state:
         st.session_state.upload_key = 0
+    if "last_token_update" not in st.session_state:
+        st.session_state.last_token_update = 0
+
+def update_token_usage(input_tokens, output_tokens, input_cost, output_cost):
+    """Update token usage and costs in session state."""
+    st.session_state.total_tokens["input"] += input_tokens
+    st.session_state.total_tokens["output"] += output_tokens
+    st.session_state.total_cost["input"] += input_cost
+    st.session_state.total_cost["output"] += output_cost
+    st.session_state.last_token_update += 1
+
+def display_token_usage():
+    """Display token usage and costs in the sidebar."""
+    st.header("Token Usage & Cost")
+    st.write(f"Total Input Tokens: {st.session_state.total_tokens['input']:,}")
+    st.write(f"Total Output Tokens: {st.session_state.total_tokens['output']:,}")
+    st.write(f"Total Input Cost: ${st.session_state.total_cost['input']:.6f}")
+    st.write(f"Total Output Cost: ${st.session_state.total_cost['output']:.6f}")
+    st.write(f"Total Cost: ${st.session_state.total_cost['input'] + st.session_state.total_cost['output']:.6f}")
+    
+    # Reset usage button
+    if st.button("Reset Usage"):
+        st.session_state.total_tokens = {"input": 0, "output": 0}
+        st.session_state.total_cost = {"input": 0, "output": 0}
+        st.session_state.last_token_update += 1
+        st.rerun()
 
 def main():
     st.set_page_config(
@@ -143,18 +180,7 @@ def main():
         )
         
         # Display token usage and cost
-        st.header("Token Usage & Cost")
-        st.write(f"Total Input Tokens: {st.session_state.total_tokens['input']:,}")
-        st.write(f"Total Output Tokens: {st.session_state.total_tokens['output']:,}")
-        st.write(f"Total Input Cost: ${st.session_state.total_cost['input']:.6f}")
-        st.write(f"Total Output Cost: ${st.session_state.total_cost['output']:.6f}")
-        st.write(f"Total Cost: ${st.session_state.total_cost['input'] + st.session_state.total_cost['output']:.6f}")
-        
-        # Reset usage button
-        if st.button("Reset Usage"):
-            st.session_state.total_tokens = {"input": 0, "output": 0}
-            st.session_state.total_cost = {"input": 0, "output": 0}
-            st.rerun()
+        display_token_usage()
         
         # System prompt selection
         prompt_choice = st.selectbox(
@@ -184,7 +210,8 @@ def main():
             for i, file in enumerate(st.session_state.uploaded_files):
                 col1, col2 = st.columns([3, 1])
                 with col1:
-                    st.write(f"{i+1}. {file.name if hasattr(file, 'name') else 'Unnamed file'}")
+                    original_name = st.session_state.file_names.get(file.name, 'Unnamed file')
+                    st.write(f"{i+1}. {original_name}")
                 with col2:
                     if st.button("Remove", key=f"remove_{i}"):
                         st.session_state.uploaded_files.pop(i)
@@ -229,9 +256,15 @@ def main():
                     # Count uploaded files tokens
                     if st.session_state.file_context:
                         for file in st.session_state.file_context:
-                            file_tokens = count_tokens(client, model_name, file)
-                            input_tokens += file_tokens
-                            st.info(f"File '{file.name if hasattr(file, 'name') else 'Unnamed'}' tokens: {file_tokens:,}")
+                            try:
+                                # Get file content as text
+                                file_content = file.text if hasattr(file, 'text') else str(file)
+                                file_tokens = count_tokens(client, model_name, file_content)
+                                input_tokens += file_tokens
+                                st.info(f"File '{file.name if hasattr(file, 'name') else 'Unnamed'}' tokens: {file_tokens:,}")
+                            except Exception as e:
+                                st.warning(f"Error counting tokens for file: {str(e)}")
+                                file_tokens = 0
                         input_context.extend(st.session_state.file_context)
                         # Clear file context after processing
                         st.session_state.file_context = []
@@ -247,9 +280,9 @@ def main():
                         contents=input_context,
                         config=types.GenerateContentConfig(
                             max_output_tokens=32768,
-                            temperature=0.1,
-                            top_p=0.95,
-                            top_k=40
+                            temperature=0.0,  # Set to 0 for most deterministic responses
+                            top_p=0.8,       # Reduced from 0.95 for more focused sampling
+                            top_k=20         # Reduced from 40 for more conservative sampling
                         )
                     )
                     
@@ -259,11 +292,8 @@ def main():
                     # Calculate costs
                     input_cost, output_cost = calculate_cost(model_name, input_tokens, output_tokens)
                     
-                    # Update session state
-                    st.session_state.total_tokens["input"] += input_tokens
-                    st.session_state.total_tokens["output"] += output_tokens
-                    st.session_state.total_cost["input"] += input_cost
-                    st.session_state.total_cost["output"] += output_cost
+                    # Update token usage
+                    update_token_usage(input_tokens, output_tokens, input_cost, output_cost)
                     
                     # Display token usage for this request
                     st.info(f"Request Tokens: {input_tokens:,} input, {output_tokens:,} output")
@@ -274,6 +304,9 @@ def main():
                     
                     # Add assistant response to chat history
                     st.session_state.messages.append({"role": "assistant", "content": response.text})
+                    
+                    # Force a rerun to update the sidebar
+                    st.rerun()
                     
                 except Exception as e:
                     st.error(f"Error: {str(e)}")
