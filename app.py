@@ -8,6 +8,37 @@ from google.genai import types
 # Load environment variables
 load_dotenv()
 
+# Model pricing information (per 1M tokens)
+MODEL_PRICING = {
+    "gemini-2.5-flash-preview-05-20": {"input": 0.15, "output": 0.60},
+    "gemini-1.5-flash": {"input": 0.075, "output": 0.30},
+    "gemini-1.5-pro": {"input": 1.25, "output": 5.00},
+    "gemini-2.0-flash": {"input": 0.10, "output": 0.40},
+    "gemini-2.0-pro": {"input": 1.25, "output": 5.00}
+}
+
+def count_tokens(client, model_name, content):
+    """Count tokens using Gemini's API."""
+    try:
+        response = client.models.count_tokens(
+            model=model_name,
+            contents=[content]
+        )
+        return response.total_tokens
+    except Exception as e:
+        st.warning(f"Error counting tokens: {str(e)}")
+        return 0
+
+def calculate_cost(model_name, input_tokens, output_tokens):
+    """Calculate the cost for a request based on token counts."""
+    if model_name not in MODEL_PRICING:
+        return 0, 0
+    
+    pricing = MODEL_PRICING[model_name]
+    input_cost = (input_tokens / 1_000_000) * pricing["input"]
+    output_cost = (output_tokens / 1_000_000) * pricing["output"]
+    return input_cost, output_cost
+
 # Default system prompts
 DEFAULT_SYSTEM_PROMPTS = {
     "default": "You are a helpful AI assistant. Provide clear, concise, and accurate responses.",
@@ -60,7 +91,13 @@ def upload_file(client, uploaded_file):
         # Upload the file
         uploaded = client.files.upload(file=temp_path)
         temp_path.unlink()  # Clean up temp file
-        return uploaded
+        
+        # Process the file with Gemini API
+        if uploaded:
+            # Clear the file context to ensure it's reprocessed
+            st.session_state.file_context = []
+            return uploaded
+        return None
     except Exception as e:
         st.error(f"Error uploading file: {str(e)}")
         return None
@@ -72,7 +109,15 @@ def initialize_session_state():
     if "uploaded_files" not in st.session_state:
         st.session_state.uploaded_files = []
     if "system_prompt" not in st.session_state:
-        st.session_state.system_prompt = DEFAULT_SYSTEM_PROMPTS["default"]
+        st.session_state.system_prompt = DEFAULT_SYSTEM_PROMPTS["retrieval"]
+    if "total_tokens" not in st.session_state:
+        st.session_state.total_tokens = {"input": 0, "output": 0}
+    if "total_cost" not in st.session_state:
+        st.session_state.total_cost = {"input": 0, "output": 0}
+    if "file_context" not in st.session_state:
+        st.session_state.file_context = []
+    if "upload_key" not in st.session_state:
+        st.session_state.upload_key = 0
 
 def main():
     st.set_page_config(
@@ -93,27 +138,45 @@ def main():
         # Model selection
         model_name = st.selectbox(
             "Select Model",
-            ["gemini-2.5-flash-preview-05-20", "gemini-1.5-flash", "gemini-1.5-pro", "gemini-2.0-flash", "gemini-2.0-pro"],
+            list(MODEL_PRICING.keys()),
             index=0
         )
+        
+        # Display token usage and cost
+        st.header("Token Usage & Cost")
+        st.write(f"Total Input Tokens: {st.session_state.total_tokens['input']:,}")
+        st.write(f"Total Output Tokens: {st.session_state.total_tokens['output']:,}")
+        st.write(f"Total Input Cost: ${st.session_state.total_cost['input']:.6f}")
+        st.write(f"Total Output Cost: ${st.session_state.total_cost['output']:.6f}")
+        st.write(f"Total Cost: ${st.session_state.total_cost['input'] + st.session_state.total_cost['output']:.6f}")
+        
+        # Reset usage button
+        if st.button("Reset Usage"):
+            st.session_state.total_tokens = {"input": 0, "output": 0}
+            st.session_state.total_cost = {"input": 0, "output": 0}
+            st.rerun()
         
         # System prompt selection
         prompt_choice = st.selectbox(
             "System Prompt",
             list(DEFAULT_SYSTEM_PROMPTS.keys()),
-            index=0
+            index=list(DEFAULT_SYSTEM_PROMPTS.keys()).index("retrieval")
         )
         st.session_state.system_prompt = DEFAULT_SYSTEM_PROMPTS[prompt_choice]
         
         # File upload
         st.header("Upload Files")
-        uploaded_file = st.file_uploader("Choose a file", type=["pdf", "txt", "docx"])
+        uploaded_file = st.file_uploader("Choose a file", type=["pdf", "txt", "docx"], key=f"file_uploader_{st.session_state.upload_key}")
         if uploaded_file:
             client = setup_gemini_client()
             new_file = upload_file(client, uploaded_file)
             if new_file:
                 st.session_state.uploaded_files.append(new_file)
                 st.success(f"File uploaded successfully! Total files: {len(st.session_state.uploaded_files)}")
+                # Increment the upload key to force a new uploader instance
+                st.session_state.upload_key += 1
+                # Rerun to clear the uploader
+                st.rerun()
         
         # Display uploaded files
         if st.session_state.uploaded_files:
@@ -125,12 +188,14 @@ def main():
                 with col2:
                     if st.button("Remove", key=f"remove_{i}"):
                         st.session_state.uploaded_files.pop(i)
+                        st.session_state.file_context = []  # Clear file context when files are removed
                         st.rerun()
         
         # Clear all files
         if st.session_state.uploaded_files:
             if st.button("Clear All Files"):
                 st.session_state.uploaded_files = []
+                st.session_state.file_context = []  # Clear file context when files are removed
                 st.rerun()
     
     # Main chat interface
@@ -153,8 +218,27 @@ def main():
                     
                     # Prepare input context
                     input_context = [st.session_state.system_prompt]
-                    if st.session_state.uploaded_files:
-                        input_context.extend(st.session_state.uploaded_files)
+                    
+                    # Count system prompt tokens
+                    input_tokens = count_tokens(client, model_name, st.session_state.system_prompt)
+                    
+                    # Add file context only if it's not already in the messages
+                    if st.session_state.uploaded_files and not st.session_state.file_context:
+                        st.session_state.file_context = st.session_state.uploaded_files.copy()
+                    
+                    # Count uploaded files tokens
+                    if st.session_state.file_context:
+                        for file in st.session_state.file_context:
+                            file_tokens = count_tokens(client, model_name, file)
+                            input_tokens += file_tokens
+                            st.info(f"File '{file.name if hasattr(file, 'name') else 'Unnamed'}' tokens: {file_tokens:,}")
+                        input_context.extend(st.session_state.file_context)
+                        # Clear file context after processing
+                        st.session_state.file_context = []
+                    
+                    # Add user prompt tokens
+                    prompt_tokens = count_tokens(client, model_name, prompt)
+                    input_tokens += prompt_tokens
                     input_context.append(prompt)
                     
                     # Generate response
@@ -168,6 +252,22 @@ def main():
                             top_k=40
                         )
                     )
+                    
+                    # Count output tokens
+                    output_tokens = count_tokens(client, model_name, response.text)
+                    
+                    # Calculate costs
+                    input_cost, output_cost = calculate_cost(model_name, input_tokens, output_tokens)
+                    
+                    # Update session state
+                    st.session_state.total_tokens["input"] += input_tokens
+                    st.session_state.total_tokens["output"] += output_tokens
+                    st.session_state.total_cost["input"] += input_cost
+                    st.session_state.total_cost["output"] += output_cost
+                    
+                    # Display token usage for this request
+                    st.info(f"Request Tokens: {input_tokens:,} input, {output_tokens:,} output")
+                    st.info(f"Request Cost: ${input_cost + output_cost:.6f}")
                     
                     # Display response
                     st.markdown(response.text)
