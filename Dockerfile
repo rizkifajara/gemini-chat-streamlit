@@ -21,11 +21,11 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 # Expose Streamlit port
-EXPOSE 8501
+EXPOSE 40050
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1
-ENV STREAMLIT_SERVER_PORT=8501
+ENV STREAMLIT_SERVER_PORT=40050
 ENV STREAMLIT_SERVER_ADDRESS=0.0.0.0
 
 # Run the application
