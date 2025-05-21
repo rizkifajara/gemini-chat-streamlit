@@ -33,6 +33,27 @@ A modern web-based chat application using Google's Gemini API, built with Stream
 
 ### Docker Deployment
 
+#### Using Docker Compose (Recommended)
+
+1. Make sure you have a `.env` file with your Google API key:
+   ```
+   GOOGLE_API_KEY="your-api-key"
+   ```
+
+2. Build and run with Docker Compose:
+   ```bash
+   # Build and start in detached mode
+   docker compose up --build -d
+
+   # View logs
+   docker compose logs -f
+
+   # Stop the application
+   docker compose down
+   ```
+
+#### Using Docker Directly
+
 1. Build the Docker image:
    ```bash
    docker build -t gemini-chat .
@@ -81,6 +102,7 @@ The application includes several pre-configured system prompts:
 ├── app.py              # Streamlit web application
 ├── requirements.txt    # Python dependencies
 ├── Dockerfile         # Docker configuration
+├── docker-compose.yml # Docker Compose configuration
 ├── .env              # Environment variables (not in git)
 └── README.md         # This file
 ```
