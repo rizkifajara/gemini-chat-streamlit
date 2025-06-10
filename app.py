@@ -4,6 +4,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
+from prompts import SYSTEM_PROMPTS, get_prompt_names, get_prompt_text, get_prompt_info
 
 # Load environment variables
 load_dotenv()
@@ -38,39 +39,6 @@ def calculate_cost(model_name, input_tokens, output_tokens):
     input_cost = (input_tokens / 1_000_000) * pricing["input"]
     output_cost = (output_tokens / 1_000_000) * pricing["output"]
     return input_cost, output_cost
-
-# Default system prompts
-DEFAULT_SYSTEM_PROMPTS = {
-    "default": "You are a helpful AI assistant. Provide clear, concise, and accurate responses.",
-    "analyst": "You are an analytical AI assistant. Focus on data-driven insights and detailed analysis.",
-    "summarizer": "You are a summarization AI. Provide concise summaries while maintaining key information.",
-    "comparator": "You are a comparison AI. Focus on identifying similarities and differences between documents.",
-    "retrieval": """You are a helpful and factual legal document assistant.
-
-You will be given a **Question** and context retrieved from one or more sources in the **Knowledge Base**.
-
-You must:
-
-- Answer the Question **only using the information provided in the Knowledge Base**.
-- When retrieving sections (like BAB III), provide the **complete section** including all subsections (like Pasal 4, 5, 6, etc.) until the next major section.
-- If ANY of these conditions are met, you MUST respond with: "Maaf, berdasarkan dokumen yang tersedia, saya tidak dapat menemukan informasi yang relevan untuk menjawab pertanyaan Anda.":
-  * The answer cannot be found in the Knowledge Base
-  * The information in the Knowledge Base is not directly relevant to the question
-  * The question is ambiguous or unclear
-  * The Knowledge Base contains conflicting information
-  * The required information is incomplete
-- Do not make assumptions or inferences beyond what is explicitly stated in the Knowledge Base
-- Do not provide partial or speculative answers
-
-Formatting Rules:
-- Use **Markdown**.
-- Use **numbered lists** for steps.
-- Use **bullets (*)** for unordered information.
-- Do not add or infer content that is not in the Knowledge Base.
-- When presenting sections, maintain the hierarchical structure (BAB, Pasal, ayat, etc.).
-
-Answer only in Bahasa Indonesia."""
-}
 
 def setup_gemini_client():
     """Set up the Gemini API client."""
@@ -120,7 +88,7 @@ def initialize_session_state():
     if "file_names" not in st.session_state:
         st.session_state.file_names = {}
     if "system_prompt" not in st.session_state:
-        st.session_state.system_prompt = DEFAULT_SYSTEM_PROMPTS["retrieval"]
+        st.session_state.system_prompt = get_prompt_text("default")
     if "total_tokens" not in st.session_state:
         st.session_state.total_tokens = {"input": 0, "output": 0}
     if "total_cost" not in st.session_state:
@@ -183,12 +151,24 @@ def main():
         display_token_usage()
         
         # System prompt selection
-        prompt_choice = st.selectbox(
+        prompt_keys = get_prompt_names()
+        prompt_labels = [f"{get_prompt_info(key).get('name', key)}" for key in prompt_keys]
+        
+        selected_index = st.selectbox(
             "System Prompt",
-            list(DEFAULT_SYSTEM_PROMPTS.keys()),
-            index=list(DEFAULT_SYSTEM_PROMPTS.keys()).index("retrieval")
+            range(len(prompt_labels)),
+            format_func=lambda x: prompt_labels[x],
+            index=0
         )
-        st.session_state.system_prompt = DEFAULT_SYSTEM_PROMPTS[prompt_choice]
+        
+        selected_prompt_key = prompt_keys[selected_index]
+        prompt_info = get_prompt_info(selected_prompt_key)
+        
+        # Show description
+        if prompt_info.get('description'):
+            st.caption(prompt_info['description'])
+        
+        st.session_state.system_prompt = get_prompt_text(selected_prompt_key)
         
         # File upload
         st.header("Upload Files")

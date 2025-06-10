@@ -87,11 +87,12 @@ The application will be available at `http://localhost:40050`
 ### System Prompts
 
 The application includes several pre-configured system prompts:
-- Default: General-purpose assistant
-- Analyst: Data-driven insights
-- Summarizer: Document summarization
-- Comparator: Document comparison
-- Retrieval: Legal document analysis
+- **General Assistant**: Versatile AI assistant for general-purpose conversations and tasks
+- **Data Analyst**: Specialized in data analysis, pattern recognition, and strategic insights
+- **Content Summarizer**: Expert at distilling complex information into digestible insights
+- **Comparison Specialist**: Designed for systematic comparison and evaluation of multiple items
+- **Creative Assistant**: Focused on creative writing, brainstorming, and innovative thinking
+- **Educational Tutor**: Specialized in teaching, explaining concepts, and educational support
 
 ## Development
 
