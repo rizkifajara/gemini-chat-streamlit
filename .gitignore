@@ -68,4 +68,12 @@ log/
 temp/
 tmp/
 *.tmp
-*.temp 
+*.temp
+
+# Environment and deployment files
+.env
+ecosystem.config.js
+logs/
+
+# Streamlit cache
+.streamlit/ 
